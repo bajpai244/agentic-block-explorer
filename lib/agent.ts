@@ -57,10 +57,36 @@ function holderTable(rows: Awaited<ReturnType<typeof getTopPepeHolders>>["rows"]
 function historyChart(address: string, data: Awaited<ReturnType<typeof getPepeHolderHistory>>, source: SourceMeta): ChatBlock {
   return {
     type: "chart",
+    chartType: "line",
     title: `PEPE balance history for ${address.slice(0, 6)}...${address.slice(-4)}`,
     xKey: "date",
     yKeys: ["balance"],
     data: data.data,
+    source,
+  };
+}
+
+function holderSupplyPie(rows: Awaited<ReturnType<typeof getTopPepeHolders>>["rows"], source: SourceMeta): ChatBlock {
+  const topRows = rows.slice(0, 10);
+  const topShare = topRows.reduce((sum, row) => sum + (row.share ?? 0), 0);
+  const data = topRows
+    .filter((row) => row.share != null)
+    .map((row) => ({
+      name: `${row.rank}) ${row.address.slice(0, 6)}...${row.address.slice(-4)}`,
+      value: Number((row.share ?? 0).toFixed(4)),
+    }));
+
+  if (topShare < 100) {
+    data.push({ name: "Others", value: Number((100 - topShare).toFixed(4)) });
+  }
+
+  return {
+    type: "chart",
+    chartType: "pie",
+    title: "PEPE supply share: top 10 holders vs others",
+    xKey: "name",
+    yKeys: ["value"],
+    data,
     source,
   };
 }
@@ -88,6 +114,13 @@ function pickHeuristicTool(message: string): { name: string; args: Record<string
   const limit = Number(message.match(/top\s+(\d+)/i)?.[1] || 20);
   const days = Number(message.match(/(\d+)\s+days?/i)?.[1] || 30);
 
+  if (
+    !address &&
+    (lower.includes("pie") || lower.includes("chart")) &&
+    (lower.includes("holder") || lower.includes("supply") || lower.includes("share"))
+  ) {
+    return { name: "getTopPepeHolders", args: { limit: 10, chartType: "pie", includeOthers: true } };
+  }
   if (lower.includes("portfolio") && address) {
     return { name: "getWalletPortfolio", args: { address, days } };
   }
@@ -127,10 +160,14 @@ async function createAnswerWithOpenRouter(message: string, toolName: string, too
   }
 }
 
-function fallbackAnswer(toolName: string, toolResult: unknown) {
+function fallbackAnswer(toolName: string, toolResult: unknown, args: Record<string, unknown>) {
   if (toolName === "getTopPepeHolders") {
     const result = toolResult as Awaited<ReturnType<typeof getTopPepeHolders>>;
     const leader = result.rows[0];
+    if (args.chartType === "pie") {
+      const topShare = result.rows.slice(0, 10).reduce((sum, row) => sum + (row.share ?? 0), 0);
+      return `Here is a native pie chart of PEPE supply share for the top 10 holders, with the remaining ${Math.max(0, 100 - topShare).toFixed(3)}% grouped as Others.`;
+    }
     return leader
       ? `The largest indexed PEPE holder in this snapshot is ${leader.address}, with about ${leader.formattedBalance} PEPE.`
       : "I could not find holder rows in the current GoldRush response.";
@@ -157,6 +194,9 @@ function fallbackAnswer(toolName: string, toolResult: unknown) {
 function blocksFor(toolName: string, args: Record<string, unknown>, toolResult: unknown): ChatBlock[] {
   if (toolName === "getTopPepeHolders") {
     const result = toolResult as Awaited<ReturnType<typeof getTopPepeHolders>>;
+    if (args.chartType === "pie") {
+      return [holderSupplyPie(result.rows, result.source), holderTable(result.rows, result.source)];
+    }
     return [holderTable(result.rows, result.source)];
   }
   if (toolName === "getPepeHolderHistory") {
@@ -225,7 +265,10 @@ export async function handleChat(input: unknown): Promise<ChatResponse> {
     },
   });
 
-  const answer = (await createAnswerWithOpenRouter(parsed.message, toolCall.name, result)) || fallbackAnswer(toolCall.name, result);
+  const deterministicChart = toolCall.args.chartType != null;
+  const answer =
+    (!deterministicChart ? await createAnswerWithOpenRouter(parsed.message, toolCall.name, result) : null) ||
+    fallbackAnswer(toolCall.name, result, toolCall.args);
   const blocks = blocksFor(toolCall.name, toolCall.args, result);
 
   await prisma.chatMessage.create({

@@ -76,6 +76,15 @@ describe("handleChat", () => {
     expect(result.toolCalls[0]?.name).toBe("getPepeHolderHistory");
   });
 
+  it("answers top-holder pie chart queries with a pie chart block", async () => {
+    const { handleChat } = await import("@/lib/agent");
+    const result = await handleChat({
+      message: "can you create a pie chart of the supply held by 10 top holders and the rest as others",
+    });
+    expect(result.blocks[0]).toMatchObject({ type: "chart", chartType: "pie" });
+    expect(result.blocks[1]?.type).toBe("table");
+  });
+
   it("rejects unsupported non-PEPE tokens", async () => {
     const { handleChat } = await import("@/lib/agent");
     const result = await handleChat({ message: "show top SHIB holders" });
