@@ -372,11 +372,11 @@ export async function handleChat(input: unknown): Promise<ChatResponse> {
     },
   });
 
-  const deterministicChart = toolCall.args.chartType != null;
-  const answer =
-    (!deterministicChart ? await createAnswerWithOpenRouter(parsed.message, toolCall.name, result) : null) ||
-    fallbackAnswer(toolCall.name, result, toolCall.args);
   const blocks = blocksFor(toolCall.name, toolCall.args, result);
+  const hasChartBlock = blocks.some((block) => block.type === "chart");
+  const answer =
+    (!hasChartBlock ? await createAnswerWithOpenRouter(parsed.message, toolCall.name, result) : null) ||
+    fallbackAnswer(toolCall.name, result, toolCall.args);
 
   await prisma.chatMessage.create({
     data: {

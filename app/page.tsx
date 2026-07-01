@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { BarChart3, Database, Loader2, Send, Sparkles, WalletCards } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import {
   CartesianGrid,
   Cell,
@@ -14,6 +15,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import remarkGfm from "remark-gfm";
 
 type SourceMeta = {
   endpoint: string;
@@ -186,6 +188,32 @@ function BlockRenderer({ block }: { block: ChatBlock }) {
   return <ChartCard block={block} />;
 }
 
+function MarkdownMessage({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        h1: ({ children }) => <h3 className="mb-2 mt-4 text-base font-semibold">{children}</h3>,
+        h2: ({ children }) => <h3 className="mb-2 mt-4 text-base font-semibold">{children}</h3>,
+        h3: ({ children }) => <h3 className="mb-2 mt-3 text-sm font-semibold">{children}</h3>,
+        p: ({ children }) => <p className="mb-3 whitespace-pre-wrap leading-6 last:mb-0">{children}</p>,
+        ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
+        ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
+        li: ({ children }) => <li className="leading-6">{children}</li>,
+        strong: ({ children }) => <strong className="font-semibold text-ink">{children}</strong>,
+        code: ({ children }) => (
+          <code className="rounded bg-stone-200 px-1 py-0.5 font-mono text-[0.9em] text-ink">{children}</code>
+        ),
+        pre: ({ children }) => (
+          <pre className="mb-3 overflow-x-auto rounded-md bg-ink p-3 text-xs text-white last:mb-0">{children}</pre>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
+
 export default function Home() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [sessionId, setSessionId] = useState<string | undefined>();
@@ -316,7 +344,7 @@ export default function Home() {
                       : "max-w-4xl rounded-lg bg-stone-50 px-4 py-3 text-sm text-stone-800"
                   }
                 >
-                  <p className="whitespace-pre-wrap leading-6">{message.content}</p>
+                  <MarkdownMessage content={message.content} />
                   {message.blocks?.map((block, blockIndex) => <BlockRenderer key={blockIndex} block={block} />)}
                 </div>
               </div>
