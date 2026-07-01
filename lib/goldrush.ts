@@ -113,6 +113,7 @@ async function goldRushGet<T>(endpoint: string, ttlSeconds = 300): Promise<T> {
       accept: "application/json",
       Authorization: `Bearer ${GOLDRUSH_API_KEY}`,
     },
+    signal: AbortSignal.timeout(25000),
   });
   if (!res.ok) {
     throw new Error(`GoldRush ${res.status}: ${await res.text()}`);

@@ -14,6 +14,12 @@ vi.mock("@/lib/prisma", () => ({
     },
     chatMessage: {
       create: vi.fn(async () => ({})),
+      findMany: vi.fn(async () => [
+        {
+          role: "user",
+          content: "can you plot the holding of the top holder's holding of chacha for the last 30 days",
+        },
+      ]),
     },
     toolCallResult: {
       create: vi.fn(async () => ({})),
@@ -97,6 +103,31 @@ describe("handleChat", () => {
     expect(getPepeHolderHistoryMock).toHaveBeenCalledWith("0x1111111111111111111111111111111111111111", 30);
     expect(result.blocks[0]).toMatchObject({ type: "chart", chartType: "line" });
     expect(result.blocks[1]?.type).toBe("table");
+  });
+
+  it("understands year windows for top-holder history", async () => {
+    const { handleChat } = await import("@/lib/agent");
+    const result = await handleChat({
+      message: "can you plot the holding of the top holder's holding of chacha for the last 1 year",
+    });
+    expect(result.toolCalls[0]).toMatchObject({
+      name: "getTopPepeHolderHistory",
+      args: { days: 365, chartType: "line" },
+    });
+    expect(getPepeHolderHistoryMock).toHaveBeenCalledWith("0x1111111111111111111111111111111111111111", 365);
+  });
+
+  it("uses prior chat context for relative time-window follow-ups", async () => {
+    const { handleChat } = await import("@/lib/agent");
+    const result = await handleChat({
+      sessionId: "session_1",
+      message: "how about in the last 1 year",
+    });
+    expect(result.toolCalls[0]).toMatchObject({
+      name: "getTopPepeHolderHistory",
+      args: { days: 365, chartType: "line" },
+    });
+    expect(result.blocks[0]).toMatchObject({ type: "chart", chartType: "line" });
   });
 
   it("rejects unsupported non-PEPE tokens", async () => {

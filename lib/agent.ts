@@ -97,6 +97,45 @@ function holderSupplyPie(rows: Awaited<ReturnType<typeof getTopPepeHolders>>["ro
   };
 }
 
+function parseDays(message: string) {
+  const lower = message.toLowerCase();
+  const explicitDays = lower.match(/(\d+)\s+days?/);
+  if (explicitDays) return Number(explicitDays[1]);
+
+  const weeks = lower.match(/(\d+)\s+weeks?/);
+  if (weeks) return Number(weeks[1]) * 7;
+
+  const months = lower.match(/(\d+)\s+months?/);
+  if (months) return Number(months[1]) * 30;
+
+  const years = lower.match(/(\d+)\s+years?/);
+  if (years) return Number(years[1]) * 365;
+
+  if (lower.includes("last year") || lower.includes("past year")) return 365;
+  if (lower.includes("last month") || lower.includes("past month")) return 30;
+  if (lower.includes("last week") || lower.includes("past week")) return 7;
+  return 30;
+}
+
+function isRelativeTimeFollowUp(message: string) {
+  const lower = message.toLowerCase();
+  return (
+    /\b(how about|what about|and|now|instead)\b/.test(lower) &&
+    /\b(last|past|previous)\b/.test(lower) &&
+    /\b(day|days|week|weeks|month|months|year|years)\b/.test(lower)
+  );
+}
+
+function referencesTopHolderHistory(message: string) {
+  const lower = message.toLowerCase();
+  return (
+    (lower.includes("plot") || lower.includes("chart") || lower.includes("history") || lower.includes("over time")) &&
+    lower.includes("top") &&
+    lower.includes("holder") &&
+    (lower.includes("holding") || lower.includes("balance"))
+  );
+}
+
 async function runTool(name: string, args: Record<string, unknown>) {
   switch (name) {
     case "getTopPepeHolders":
@@ -124,19 +163,24 @@ async function runTool(name: string, args: Record<string, unknown>) {
   }
 }
 
-function pickHeuristicTool(message: string): { name: string; args: Record<string, unknown> } {
+function pickHeuristicTool(
+  message: string,
+  contextMessages: { role: string; content: string }[] = [],
+): { name: string; args: Record<string, unknown> } {
   const lower = message.toLowerCase();
   const address = message.match(addressPattern)?.[0];
   const limit = Number(message.match(/top\s+(\d+)/i)?.[1] || 20);
-  const days = Number(message.match(/(\d+)\s+days?/i)?.[1] || 30);
+  const days = parseDays(message);
+  const previousUserText = contextMessages
+    .filter((contextMessage) => contextMessage.role === "user")
+    .map((contextMessage) => contextMessage.content)
+    .join("\n")
+    .toLowerCase();
 
-  if (
-    !address &&
-    (lower.includes("plot") || lower.includes("chart") || lower.includes("history") || lower.includes("over time")) &&
-    lower.includes("top") &&
-    lower.includes("holder") &&
-    (lower.includes("holding") || lower.includes("balance"))
-  ) {
+  if (!address && referencesTopHolderHistory(message)) {
+    return { name: "getTopPepeHolderHistory", args: { days, chartType: "line" } };
+  }
+  if (!address && isRelativeTimeFollowUp(message) && referencesTopHolderHistory(previousUserText)) {
     return { name: "getTopPepeHolderHistory", args: { days, chartType: "line" } };
   }
   if (
@@ -284,6 +328,16 @@ export async function handleChat(input: unknown): Promise<ChatResponse> {
         })
       : await prisma.chatSession.create({ data: {} });
 
+  const contextMessages =
+    parsed.sessionId != null
+      ? await prisma.chatMessage.findMany({
+          where: { sessionId: session.id },
+          orderBy: { createdAt: "desc" },
+          take: 8,
+          select: { role: true, content: true },
+        })
+      : [];
+
   await prisma.chatMessage.create({
     data: { sessionId: session.id, role: "user", content: parsed.message },
   });
@@ -294,7 +348,7 @@ export async function handleChat(input: unknown): Promise<ChatResponse> {
     return { sessionId: session.id, answer, blocks: [], toolCalls: [] };
   }
 
-  const toolCall = pickHeuristicTool(parsed.message);
+  const toolCall = pickHeuristicTool(parsed.message, contextMessages.reverse());
   const result = await runTool(toolCall.name, toolCall.args);
 
   await prisma.toolCallResult.create({
