@@ -21,6 +21,12 @@ const chatInputSchema = z.object({
 
 export type ChatInput = z.infer<typeof chatInputSchema>;
 
+type TopPepeHolderHistoryResult = {
+  holder: Awaited<ReturnType<typeof getTopPepeHolders>>["rows"][number] | null;
+  holderSource: SourceMeta;
+  history: Awaited<ReturnType<typeof getPepeHolderHistory>> | null;
+};
+
 function getOpenRouterClient() {
   const config = getServerConfig();
   if (!config.OPENROUTER_API_KEY) return null;
@@ -57,6 +63,7 @@ function holderTable(rows: Awaited<ReturnType<typeof getTopPepeHolders>>["rows"]
 function historyChart(address: string, data: Awaited<ReturnType<typeof getPepeHolderHistory>>, source: SourceMeta): ChatBlock {
   return {
     type: "chart",
+    chartType: "line",
     title: `PEPE balance history for ${address.slice(0, 6)}...${address.slice(-4)}`,
     xKey: "date",
     yKeys: ["balance"],
@@ -65,10 +72,96 @@ function historyChart(address: string, data: Awaited<ReturnType<typeof getPepeHo
   };
 }
 
+function holderSupplyPie(rows: Awaited<ReturnType<typeof getTopPepeHolders>>["rows"], source: SourceMeta): ChatBlock {
+  const topRows = rows.slice(0, 10);
+  const topShare = topRows.reduce((sum, row) => sum + (row.share ?? 0), 0);
+  const data = topRows
+    .filter((row) => row.share != null)
+    .map((row) => ({
+      name: `${row.rank}) ${row.address.slice(0, 6)}...${row.address.slice(-4)}`,
+      value: Number((row.share ?? 0).toFixed(4)),
+    }));
+
+  if (topShare < 100) {
+    data.push({ name: "Others", value: Number((100 - topShare).toFixed(4)) });
+  }
+
+  return {
+    type: "chart",
+    chartType: "pie",
+    title: "PEPE supply share: top 10 holders vs others",
+    xKey: "name",
+    yKeys: ["value"],
+    data,
+    source,
+  };
+}
+
+function parseDays(message: string) {
+  const lower = message.toLowerCase();
+  const explicitDays = lower.match(/(\d+)\s+days?/);
+  if (explicitDays) return Number(explicitDays[1]);
+
+  const weeks = lower.match(/(\d+)\s+weeks?/);
+  if (weeks) return Number(weeks[1]) * 7;
+
+  const months = lower.match(/(\d+)\s+months?/);
+  if (months) return Number(months[1]) * 30;
+
+  const years = lower.match(/(\d+)\s+years?/);
+  if (years) return Number(years[1]) * 365;
+
+  if (lower.includes("last year") || lower.includes("past year")) return 365;
+  if (lower.includes("last month") || lower.includes("past month")) return 30;
+  if (lower.includes("last week") || lower.includes("past week")) return 7;
+  return 30;
+}
+
+function isRelativeTimeFollowUp(message: string) {
+  const lower = message.toLowerCase();
+  return (
+    /\b(how about|what about|and|now|instead)\b/.test(lower) &&
+    /\b(last|past|previous)\b/.test(lower) &&
+    /\b(day|days|week|weeks|month|months|year|years)\b/.test(lower)
+  );
+}
+
+function referencesTopHolderHistory(message: string) {
+  const lower = message.toLowerCase();
+  return (
+    referencesHistoryIntent(lower) &&
+    lower.includes("top") &&
+    lower.includes("holder") &&
+    (lower.includes("holding") || lower.includes("balance"))
+  );
+}
+
+function referencesHistoryIntent(message: string) {
+  const lower = message.toLowerCase();
+  const asksForPlot = lower.includes("plot") || lower.includes("chart");
+  const asksForHistory =
+    lower.includes("history") ||
+    lower.includes("historic") ||
+    lower.includes("historical") ||
+    lower.includes("over time");
+  const asksForHolding = lower.includes("holding") || lower.includes("hold") || lower.includes("balance");
+  return asksForHistory || (asksForPlot && asksForHolding);
+}
+
 async function runTool(name: string, args: Record<string, unknown>) {
   switch (name) {
     case "getTopPepeHolders":
       return getTopPepeHolders(Number(args.limit || 20));
+    case "getTopPepeHolderHistory": {
+      const holders = await getTopPepeHolders(1);
+      const holder = holders.rows[0] ?? null;
+      const history = holder ? await getPepeHolderHistory(holder.address, Number(args.days || 30)) : null;
+      return {
+        holder,
+        holderSource: holders.source,
+        history,
+      } satisfies TopPepeHolderHistoryResult;
+    }
     case "getPepeHolderBalance":
       return getPepeHolderBalance(String(args.address || ""));
     case "getWalletPortfolio":
@@ -82,16 +175,37 @@ async function runTool(name: string, args: Record<string, unknown>) {
   }
 }
 
-function pickHeuristicTool(message: string): { name: string; args: Record<string, unknown> } {
+function pickHeuristicTool(
+  message: string,
+  contextMessages: { role: string; content: string }[] = [],
+): { name: string; args: Record<string, unknown> } {
   const lower = message.toLowerCase();
   const address = message.match(addressPattern)?.[0];
   const limit = Number(message.match(/top\s+(\d+)/i)?.[1] || 20);
-  const days = Number(message.match(/(\d+)\s+days?/i)?.[1] || 30);
+  const days = parseDays(message);
+  const previousUserText = contextMessages
+    .filter((contextMessage) => contextMessage.role === "user")
+    .map((contextMessage) => contextMessage.content)
+    .join("\n")
+    .toLowerCase();
 
+  if (!address && referencesTopHolderHistory(message)) {
+    return { name: "getTopPepeHolderHistory", args: { days, chartType: "line" } };
+  }
+  if (!address && isRelativeTimeFollowUp(message) && referencesTopHolderHistory(previousUserText)) {
+    return { name: "getTopPepeHolderHistory", args: { days, chartType: "line" } };
+  }
+  if (
+    !address &&
+    (lower.includes("pie") || lower.includes("chart")) &&
+    (lower.includes("holder") || lower.includes("supply") || lower.includes("share"))
+  ) {
+    return { name: "getTopPepeHolders", args: { limit: 10, chartType: "pie", includeOthers: true } };
+  }
   if (lower.includes("portfolio") && address) {
     return { name: "getWalletPortfolio", args: { address, days } };
   }
-  if ((lower.includes("chart") || lower.includes("history") || lower.includes("over time")) && address) {
+  if (referencesHistoryIntent(message) && address) {
     return { name: "getPepeHolderHistory", args: { address, days } };
   }
   if ((lower.includes("transfer") || lower.includes("bought") || lower.includes("sold")) && address) {
@@ -127,10 +241,14 @@ async function createAnswerWithOpenRouter(message: string, toolName: string, too
   }
 }
 
-function fallbackAnswer(toolName: string, toolResult: unknown) {
+function fallbackAnswer(toolName: string, toolResult: unknown, args: Record<string, unknown>) {
   if (toolName === "getTopPepeHolders") {
     const result = toolResult as Awaited<ReturnType<typeof getTopPepeHolders>>;
     const leader = result.rows[0];
+    if (args.chartType === "pie") {
+      const topShare = result.rows.slice(0, 10).reduce((sum, row) => sum + (row.share ?? 0), 0);
+      return `Here is a native pie chart of PEPE supply share for the top 10 holders, with the remaining ${Math.max(0, 100 - topShare).toFixed(3)}% grouped as Others.`;
+    }
     return leader
       ? `The largest indexed PEPE holder in this snapshot is ${leader.address}, with about ${leader.formattedBalance} PEPE.`
       : "I could not find holder rows in the current GoldRush response.";
@@ -140,6 +258,14 @@ function fallbackAnswer(toolName: string, toolResult: unknown) {
     return result.data.length
       ? `I found ${result.data.length} PEPE balance points for this wallet and charted them below.`
       : "I could not find PEPE holding history for that wallet in the selected window.";
+  }
+  if (toolName === "getTopPepeHolderHistory") {
+    const result = toolResult as TopPepeHolderHistoryResult;
+    if (!result.holder) return "I could not identify the current top PEPE holder from GoldRush.";
+    if (!result.history?.data.length) {
+      return `The current top PEPE holder is ${result.holder.address}, but GoldRush did not return PEPE balance history for the selected window.`;
+    }
+    return `The current top PEPE holder is ${result.holder.address}. I fetched its PEPE portfolio history for the last ${Number(args.days || 30)} days and charted it below.`;
   }
   if (toolName === "getWalletPortfolio") {
     const result = toolResult as Awaited<ReturnType<typeof getWalletPortfolio>>;
@@ -157,11 +283,22 @@ function fallbackAnswer(toolName: string, toolResult: unknown) {
 function blocksFor(toolName: string, args: Record<string, unknown>, toolResult: unknown): ChatBlock[] {
   if (toolName === "getTopPepeHolders") {
     const result = toolResult as Awaited<ReturnType<typeof getTopPepeHolders>>;
+    if (args.chartType === "pie") {
+      return [holderSupplyPie(result.rows, result.source), holderTable(result.rows, result.source)];
+    }
     return [holderTable(result.rows, result.source)];
   }
   if (toolName === "getPepeHolderHistory") {
     const result = toolResult as Awaited<ReturnType<typeof getPepeHolderHistory>>;
     return [historyChart(String(args.address), result, result.source)];
+  }
+  if (toolName === "getTopPepeHolderHistory") {
+    const result = toolResult as TopPepeHolderHistoryResult;
+    if (!result.holder || !result.history) return [];
+    return [
+      historyChart(result.holder.address, result.history, result.history.source),
+      holderTable([result.holder], result.holderSource),
+    ];
   }
   if (toolName === "getWalletPortfolio") {
     const result = toolResult as Awaited<ReturnType<typeof getWalletPortfolio>>;
@@ -203,6 +340,16 @@ export async function handleChat(input: unknown): Promise<ChatResponse> {
         })
       : await prisma.chatSession.create({ data: {} });
 
+  const contextMessages =
+    parsed.sessionId != null
+      ? await prisma.chatMessage.findMany({
+          where: { sessionId: session.id },
+          orderBy: { createdAt: "desc" },
+          take: 8,
+          select: { role: true, content: true },
+        })
+      : [];
+
   await prisma.chatMessage.create({
     data: { sessionId: session.id, role: "user", content: parsed.message },
   });
@@ -213,7 +360,7 @@ export async function handleChat(input: unknown): Promise<ChatResponse> {
     return { sessionId: session.id, answer, blocks: [], toolCalls: [] };
   }
 
-  const toolCall = pickHeuristicTool(parsed.message);
+  const toolCall = pickHeuristicTool(parsed.message, contextMessages.reverse());
   const result = await runTool(toolCall.name, toolCall.args);
 
   await prisma.toolCallResult.create({
@@ -225,7 +372,10 @@ export async function handleChat(input: unknown): Promise<ChatResponse> {
     },
   });
 
-  const answer = (await createAnswerWithOpenRouter(parsed.message, toolCall.name, result)) || fallbackAnswer(toolCall.name, result);
+  const deterministicChart = toolCall.args.chartType != null;
+  const answer =
+    (!deterministicChart ? await createAnswerWithOpenRouter(parsed.message, toolCall.name, result) : null) ||
+    fallbackAnswer(toolCall.name, result, toolCall.args);
   const blocks = blocksFor(toolCall.name, toolCall.args, result);
 
   await prisma.chatMessage.create({

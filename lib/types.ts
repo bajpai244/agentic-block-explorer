@@ -25,6 +25,7 @@ export type TableBlock = {
 
 export type ChartBlock = {
   type: "chart";
+  chartType: "line" | "pie";
   title: string;
   xKey: string;
   yKeys: string[];

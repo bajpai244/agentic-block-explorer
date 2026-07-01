@@ -4,8 +4,11 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { BarChart3, Database, Loader2, Send, Sparkles, WalletCards } from "lucide-react";
 import {
   CartesianGrid,
+  Cell,
   Line,
   LineChart,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -30,6 +33,7 @@ type TableBlock = {
 
 type ChartBlock = {
   type: "chart";
+  chartType: "line" | "pie";
   title: string;
   xKey: string;
   yKeys: string[];
@@ -66,8 +70,11 @@ type Summary = {
 const starterPrompts = [
   "Who is the biggest holder of PEPE?",
   "Show me the top 20 PEPE holders.",
+  "Create a pie chart of PEPE supply held by the top 10 holders and group the rest as others.",
   "Chart this wallet's PEPE holdings over time: 0x0000000000000000000000000000000000000000",
 ];
+
+const pieColors = ["#49633f", "#85a947", "#b7f26d", "#101418", "#786f61", "#d7c15c", "#4b8b89", "#9a6f45", "#6c7a89", "#c45b51", "#d8d8cc"];
 
 function truncate(address: string) {
   if (address.length < 12) return address;
@@ -126,6 +133,8 @@ function DataTable({ block }: { block: TableBlock }) {
 }
 
 function ChartCard({ block }: { block: ChartBlock }) {
+  const valueKey = block.yKeys[0] || "value";
+
   return (
     <div className="mt-4 rounded-lg border border-stone-200 bg-white p-4">
       <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
@@ -133,17 +142,39 @@ function ChartCard({ block }: { block: ChartBlock }) {
         {block.title}
       </div>
       <div className="h-72 w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={block.data} margin={{ top: 12, right: 12, bottom: 12, left: 12 }}>
-            <CartesianGrid stroke="#e7e5df" />
-            <XAxis dataKey={block.xKey} tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 12 }} width={72} />
-            <Tooltip />
-            {block.yKeys.map((key) => (
-              <Line key={key} type="monotone" dataKey={key} stroke="#49633f" strokeWidth={2} dot={false} />
-            ))}
-          </LineChart>
-        </ResponsiveContainer>
+        {block.chartType === "pie" ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+              <Pie
+                data={block.data}
+                dataKey={valueKey}
+                nameKey={block.xKey}
+                cx="50%"
+                cy="50%"
+                outerRadius="82%"
+                label={({ name, value }) => `${name}: ${Number(value).toFixed(2)}%`}
+                labelLine={false}
+              >
+                {block.data.map((_, index) => (
+                  <Cell key={index} fill={pieColors[index % pieColors.length]} />
+                ))}
+              </Pie>
+              <Tooltip formatter={(value) => `${Number(value).toFixed(4)}%`} />
+            </PieChart>
+          </ResponsiveContainer>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={block.data} margin={{ top: 12, right: 12, bottom: 12, left: 12 }}>
+              <CartesianGrid stroke="#e7e5df" />
+              <XAxis dataKey={block.xKey} tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} width={72} />
+              <Tooltip />
+              {block.yKeys.map((key) => (
+                <Line key={key} type="monotone" dataKey={key} stroke="#49633f" strokeWidth={2} dot={false} />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        )}
       </div>
       <SourceLine source={block.source} />
     </div>
