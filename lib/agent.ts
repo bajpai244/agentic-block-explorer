@@ -27,6 +27,12 @@ type TopPepeHolderHistoryResult = {
   history: Awaited<ReturnType<typeof getPepeHolderHistory>> | null;
 };
 
+type PepeHolderHistoryResult = Awaited<ReturnType<typeof getPepeHolderHistory>> & {
+  requestedDays?: number;
+  servedDays?: number;
+  warning?: string;
+};
+
 function getOpenRouterClient() {
   const config = getServerConfig();
   if (!config.OPENROUTER_API_KEY) return null;
@@ -148,6 +154,36 @@ function referencesHistoryIntent(message: string) {
   return asksForHistory || (asksForPlot && asksForHolding);
 }
 
+function isTimeoutError(error: unknown) {
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+}
+
+async function getPepeHolderHistoryWithFallback(address: string, requestedDays: number): Promise<PepeHolderHistoryResult> {
+  const fallbackWindows = [requestedDays, 270, 180, 90, 30].filter(
+    (days, index, windows) => days > 0 && days <= requestedDays && windows.indexOf(days) === index,
+  );
+
+  let lastError: unknown;
+  for (const days of fallbackWindows) {
+    try {
+      const history = await getPepeHolderHistory(address, days);
+      return days === requestedDays
+        ? { ...history, requestedDays, servedDays: days }
+        : {
+            ...history,
+            requestedDays,
+            servedDays: days,
+            warning: `GoldRush timed out for the requested ${requestedDays}-day window, so I charted the latest ${days} days that returned successfully.`,
+          };
+    } catch (error) {
+      lastError = error;
+      if (!isTimeoutError(error)) throw error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("GoldRush history request timed out");
+}
+
 async function runTool(name: string, args: Record<string, unknown>) {
   switch (name) {
     case "getTopPepeHolders":
@@ -155,7 +191,7 @@ async function runTool(name: string, args: Record<string, unknown>) {
     case "getTopPepeHolderHistory": {
       const holders = await getTopPepeHolders(1);
       const holder = holders.rows[0] ?? null;
-      const history = holder ? await getPepeHolderHistory(holder.address, Number(args.days || 30)) : null;
+      const history = holder ? await getPepeHolderHistoryWithFallback(holder.address, Number(args.days || 30)) : null;
       return {
         holder,
         holderSource: holders.source,
@@ -167,7 +203,7 @@ async function runTool(name: string, args: Record<string, unknown>) {
     case "getWalletPortfolio":
       return getWalletPortfolio(String(args.address || ""), Number(args.days || 30));
     case "getPepeHolderHistory":
-      return getPepeHolderHistory(String(args.address || ""), Number(args.days || 30));
+      return getPepeHolderHistoryWithFallback(String(args.address || ""), Number(args.days || 30));
     case "getPepeTransfers":
       return getPepeTransfers(String(args.address || ""), Number(args.limit || 10));
     default:
@@ -254,9 +290,10 @@ function fallbackAnswer(toolName: string, toolResult: unknown, args: Record<stri
       : "I could not find holder rows in the current GoldRush response.";
   }
   if (toolName === "getPepeHolderHistory") {
-    const result = toolResult as Awaited<ReturnType<typeof getPepeHolderHistory>>;
+    const result = toolResult as PepeHolderHistoryResult;
+    const prefix = result.warning ? `${result.warning}\n\n` : "";
     return result.data.length
-      ? `I found ${result.data.length} PEPE balance points for this wallet and charted them below.`
+      ? `${prefix}I found ${result.data.length} PEPE balance points for this wallet and charted them below.`
       : "I could not find PEPE holding history for that wallet in the selected window.";
   }
   if (toolName === "getTopPepeHolderHistory") {
@@ -265,7 +302,9 @@ function fallbackAnswer(toolName: string, toolResult: unknown, args: Record<stri
     if (!result.history?.data.length) {
       return `The current top PEPE holder is ${result.holder.address}, but GoldRush did not return PEPE balance history for the selected window.`;
     }
-    return `The current top PEPE holder is ${result.holder.address}. I fetched its PEPE portfolio history for the last ${Number(args.days || 30)} days and charted it below.`;
+    const warning = (result.history as PepeHolderHistoryResult).warning;
+    const prefix = warning ? `${warning}\n\n` : "";
+    return `${prefix}The current top PEPE holder is ${result.holder.address}. I fetched its PEPE portfolio history and charted it below.`;
   }
   if (toolName === "getWalletPortfolio") {
     const result = toolResult as Awaited<ReturnType<typeof getWalletPortfolio>>;
@@ -289,7 +328,7 @@ function blocksFor(toolName: string, args: Record<string, unknown>, toolResult: 
     return [holderTable(result.rows, result.source)];
   }
   if (toolName === "getPepeHolderHistory") {
-    const result = toolResult as Awaited<ReturnType<typeof getPepeHolderHistory>>;
+    const result = toolResult as PepeHolderHistoryResult;
     return [historyChart(String(args.address), result, result.source)];
   }
   if (toolName === "getTopPepeHolderHistory") {

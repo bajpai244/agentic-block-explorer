@@ -99,6 +99,27 @@ describe("handleChat", () => {
     expect(result.blocks[0]).toMatchObject({ type: "chart", chartType: "line" });
   });
 
+  it("falls back to a shorter history window when GoldRush times out", async () => {
+    getPepeHolderHistoryMock
+      .mockRejectedValueOnce(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }))
+      .mockResolvedValueOnce({
+        token: "PEPE",
+        data: [{ date: "2026-07-01", balance: 100, quote: 1, quoteRate: 0.01 }],
+        source: { endpoint: "/portfolio?days=270", indexedAt: "2026-07-01T00:00:00.000Z" },
+      });
+
+    const { handleChat } = await import("@/lib/agent");
+    const address = "0x6982508145454ce325ddbe47a25d4ec3d2311933";
+    const result = await handleChat({
+      message: `${address} plot historic hold of this account for the last 1 year`,
+    });
+
+    expect(getPepeHolderHistoryMock).toHaveBeenNthCalledWith(1, address, 365);
+    expect(getPepeHolderHistoryMock).toHaveBeenNthCalledWith(2, address, 270);
+    expect(result.answer).toMatch(/timed out/i);
+    expect(result.blocks[0]).toMatchObject({ type: "chart", chartType: "line" });
+  });
+
   it("answers top-holder pie chart queries with a pie chart block", async () => {
     const { handleChat } = await import("@/lib/agent");
     const result = await handleChat({
