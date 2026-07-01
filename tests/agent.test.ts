@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const getPepeHolderHistoryMock = vi.fn(async () => ({
+  token: "PEPE",
+  data: [{ date: "2026-07-01", balance: 100, quote: 1, quoteRate: 0.01 }],
+  source: { endpoint: "/portfolio", indexedAt: "2026-07-01T00:00:00.000Z" },
+}));
+
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     chatSession: {
@@ -36,11 +42,7 @@ vi.mock("@/lib/goldrush", () => ({
     row: null,
     source: { endpoint: "/holders", indexedAt: "2026-07-01T00:00:00.000Z" },
   })),
-  getPepeHolderHistory: vi.fn(async () => ({
-    token: "PEPE",
-    data: [{ date: "2026-07-01", balance: 100, quote: 1, quoteRate: 0.01 }],
-    source: { endpoint: "/portfolio", indexedAt: "2026-07-01T00:00:00.000Z" },
-  })),
+  getPepeHolderHistory: getPepeHolderHistoryMock,
   getPepeTransfers: vi.fn(async () => ({
     items: [],
     source: { endpoint: "/transfers", indexedAt: "2026-07-01T00:00:00.000Z" },
@@ -55,6 +57,7 @@ vi.mock("@/lib/goldrush", () => ({
 describe("handleChat", () => {
   beforeEach(() => {
     vi.resetModules();
+    getPepeHolderHistoryMock.mockClear();
     process.env.GOLDRUSH_API_KEY = "test";
     process.env.DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/chacha";
   });
@@ -82,6 +85,17 @@ describe("handleChat", () => {
       message: "can you create a pie chart of the supply held by 10 top holders and the rest as others",
     });
     expect(result.blocks[0]).toMatchObject({ type: "chart", chartType: "pie" });
+    expect(result.blocks[1]?.type).toBe("table");
+  });
+
+  it("plots the current top holder history by chaining holder lookup into portfolio history", async () => {
+    const { handleChat } = await import("@/lib/agent");
+    const result = await handleChat({
+      message: "can you plot the holding of the top holder's holding of chacha for the last 30 days",
+    });
+    expect(result.toolCalls[0]?.name).toBe("getTopPepeHolderHistory");
+    expect(getPepeHolderHistoryMock).toHaveBeenCalledWith("0x1111111111111111111111111111111111111111", 30);
+    expect(result.blocks[0]).toMatchObject({ type: "chart", chartType: "line" });
     expect(result.blocks[1]?.type).toBe("table");
   });
 

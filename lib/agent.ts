@@ -21,6 +21,12 @@ const chatInputSchema = z.object({
 
 export type ChatInput = z.infer<typeof chatInputSchema>;
 
+type TopPepeHolderHistoryResult = {
+  holder: Awaited<ReturnType<typeof getTopPepeHolders>>["rows"][number] | null;
+  holderSource: SourceMeta;
+  history: Awaited<ReturnType<typeof getPepeHolderHistory>> | null;
+};
+
 function getOpenRouterClient() {
   const config = getServerConfig();
   if (!config.OPENROUTER_API_KEY) return null;
@@ -95,6 +101,16 @@ async function runTool(name: string, args: Record<string, unknown>) {
   switch (name) {
     case "getTopPepeHolders":
       return getTopPepeHolders(Number(args.limit || 20));
+    case "getTopPepeHolderHistory": {
+      const holders = await getTopPepeHolders(1);
+      const holder = holders.rows[0] ?? null;
+      const history = holder ? await getPepeHolderHistory(holder.address, Number(args.days || 30)) : null;
+      return {
+        holder,
+        holderSource: holders.source,
+        history,
+      } satisfies TopPepeHolderHistoryResult;
+    }
     case "getPepeHolderBalance":
       return getPepeHolderBalance(String(args.address || ""));
     case "getWalletPortfolio":
@@ -114,6 +130,15 @@ function pickHeuristicTool(message: string): { name: string; args: Record<string
   const limit = Number(message.match(/top\s+(\d+)/i)?.[1] || 20);
   const days = Number(message.match(/(\d+)\s+days?/i)?.[1] || 30);
 
+  if (
+    !address &&
+    (lower.includes("plot") || lower.includes("chart") || lower.includes("history") || lower.includes("over time")) &&
+    lower.includes("top") &&
+    lower.includes("holder") &&
+    (lower.includes("holding") || lower.includes("balance"))
+  ) {
+    return { name: "getTopPepeHolderHistory", args: { days, chartType: "line" } };
+  }
   if (
     !address &&
     (lower.includes("pie") || lower.includes("chart")) &&
@@ -178,6 +203,14 @@ function fallbackAnswer(toolName: string, toolResult: unknown, args: Record<stri
       ? `I found ${result.data.length} PEPE balance points for this wallet and charted them below.`
       : "I could not find PEPE holding history for that wallet in the selected window.";
   }
+  if (toolName === "getTopPepeHolderHistory") {
+    const result = toolResult as TopPepeHolderHistoryResult;
+    if (!result.holder) return "I could not identify the current top PEPE holder from GoldRush.";
+    if (!result.history?.data.length) {
+      return `The current top PEPE holder is ${result.holder.address}, but GoldRush did not return PEPE balance history for the selected window.`;
+    }
+    return `The current top PEPE holder is ${result.holder.address}. I fetched its PEPE portfolio history for the last ${Number(args.days || 30)} days and charted it below.`;
+  }
   if (toolName === "getWalletPortfolio") {
     const result = toolResult as Awaited<ReturnType<typeof getWalletPortfolio>>;
     return `This wallet portfolio response includes ${result.items.length} token positions from GoldRush.`;
@@ -202,6 +235,14 @@ function blocksFor(toolName: string, args: Record<string, unknown>, toolResult: 
   if (toolName === "getPepeHolderHistory") {
     const result = toolResult as Awaited<ReturnType<typeof getPepeHolderHistory>>;
     return [historyChart(String(args.address), result, result.source)];
+  }
+  if (toolName === "getTopPepeHolderHistory") {
+    const result = toolResult as TopPepeHolderHistoryResult;
+    if (!result.holder || !result.history) return [];
+    return [
+      historyChart(result.holder.address, result.history, result.history.source),
+      holderTable([result.holder], result.holderSource),
+    ];
   }
   if (toolName === "getWalletPortfolio") {
     const result = toolResult as Awaited<ReturnType<typeof getWalletPortfolio>>;
