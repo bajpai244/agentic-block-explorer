@@ -129,11 +129,23 @@ function isRelativeTimeFollowUp(message: string) {
 function referencesTopHolderHistory(message: string) {
   const lower = message.toLowerCase();
   return (
-    (lower.includes("plot") || lower.includes("chart") || lower.includes("history") || lower.includes("over time")) &&
+    referencesHistoryIntent(lower) &&
     lower.includes("top") &&
     lower.includes("holder") &&
     (lower.includes("holding") || lower.includes("balance"))
   );
+}
+
+function referencesHistoryIntent(message: string) {
+  const lower = message.toLowerCase();
+  const asksForPlot = lower.includes("plot") || lower.includes("chart");
+  const asksForHistory =
+    lower.includes("history") ||
+    lower.includes("historic") ||
+    lower.includes("historical") ||
+    lower.includes("over time");
+  const asksForHolding = lower.includes("holding") || lower.includes("hold") || lower.includes("balance");
+  return asksForHistory || (asksForPlot && asksForHolding);
 }
 
 async function runTool(name: string, args: Record<string, unknown>) {
@@ -193,7 +205,7 @@ function pickHeuristicTool(
   if (lower.includes("portfolio") && address) {
     return { name: "getWalletPortfolio", args: { address, days } };
   }
-  if ((lower.includes("chart") || lower.includes("history") || lower.includes("over time")) && address) {
+  if (referencesHistoryIntent(message) && address) {
     return { name: "getPepeHolderHistory", args: { address, days } };
   }
   if ((lower.includes("transfer") || lower.includes("bought") || lower.includes("sold")) && address) {

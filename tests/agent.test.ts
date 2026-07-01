@@ -85,6 +85,20 @@ describe("handleChat", () => {
     expect(result.toolCalls[0]?.name).toBe("getPepeHolderHistory");
   });
 
+  it("routes explicit historic hold prompts to holder history", async () => {
+    const { handleChat } = await import("@/lib/agent");
+    const address = "0x6982508145454ce325ddbe47a25d4ec3d2311933";
+    const result = await handleChat({
+      message: `${address} plot historic hold of this account for the last 1 year`,
+    });
+    expect(result.toolCalls[0]).toMatchObject({
+      name: "getPepeHolderHistory",
+      args: { address, days: 365 },
+    });
+    expect(getPepeHolderHistoryMock).toHaveBeenCalledWith(address, 365);
+    expect(result.blocks[0]).toMatchObject({ type: "chart", chartType: "line" });
+  });
+
   it("answers top-holder pie chart queries with a pie chart block", async () => {
     const { handleChat } = await import("@/lib/agent");
     const result = await handleChat({
